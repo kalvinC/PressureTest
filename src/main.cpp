@@ -1,116 +1,146 @@
-#include <stdio.h>
-#include <sys/epoll.h>
-#include <fcntl.h>
+#include "Socket.h"
+
+#include <stdio.h>   
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
+#include <sys/epoll.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
-#include <stdlib.h>
-
-typedef struct Event_PL{
-    int epoll_fd;
-};
-
-int SetNonBlocking(int fd)
-{
-	int flag = fcntl(fd, F_GETFL, 0);
-	
-	if(flag < 0)
-	{
-		return -1;
-	}	
-
-	if(fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0)
-	{
-		return -1;
-	}
-
-	return 0;
-}
-
-int add_conn()
-{
-
-	return 0;
-}
-
-int del_conn()
-{
-	return 0;
-}
+#include <sys/time.h>
 
 static int epoll_fd;
-static struct epoll_event * events;
-int main(int argc, char * argv[])
+static epoll_event * ep_events;
+static volatile int send_count;
+static volatile int recv_count;
+
+
+void NewConn(int fd)
+{	
+	int result;
+	if(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void *)&result, sizeof(int)) < 0)
+	{
+		fprintf(stderr, "setscokopt socket reuse error\n");
+		return ;
+	}
+	Socket::SetNonBlock(fd);
+
+	struct epoll_event epevent;
+	epevent.data.fd = fd;
+	epevent.events = EPOLLIN | EPOLLOUT;
+	   
+	epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &epevent);
+
+	if(Socket::Connect(fd,"117.74.136.118", 8802) < 0)
+	{
+		fprintf(stderr, "connect err:%s\n", strerror(errno));
+		exit(1);
+	}	
+}
+
+int main(int argc, char ** argv)
 {
 	epoll_fd = epoll_create(10240);
-	if(epoll_fd == -1)
+	
+	if(epoll_fd < 0)
 	{
+		fprintf(stderr, "create epoll queue error\n");
 		exit(1);
 	}
 
-    for(int i = 0; i < 1000; i++)
-	{
-		int fd = socket(AF_INET, SOCK_STREAM, 0);
 
-		struct sockaddr_in server_addr;
-		server_addr.sin_family = AF_INET;
-		server_addr.sin_port = htons(8000);
-		server_addr.sin_addr.s_addr = inet_addr("192.168.0.118");
-		
-		SetNonBlocking(fd);
-	
-		struct epoll_event event;
-		event.data.fd = fd;
-		event.events = EPOLLIN | EPOLLOUT;
-		
-		printf("%d\n", fd);	
-		epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, events);
- 	
-		if(connect(fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr)) == -1)
+        ep_events = (struct epoll_event *)calloc(sizeof(struct epoll_event), 1000);
+
+	for(int i=0; i < 10000; i++)
+	{
+		int fd = Socket::NewSocket(Protocol_TCP);
+  		
+		if(fd < 0)
 		{
-			if(errno == EINPROGRESS)
-			{
-				printf("waitting to connect\n");
-				continue;
-			}
-			printf("connect error\n");
 			exit(1);
 		}
 
+       		 NewConn(fd);		
 	}
 
-        events = (struct epoll_event *)calloc(sizeof(struct epoll_event), 1000);
+	char write_buf[2048] = {0};
+    	char read_buf[2048] = {0};
 
+        struct timeval tmval;
+	gettimeofday(&tmval, NULL);
+
+	struct timeval nwval;
 	while(1)
 	{
-		int n = epoll_wait(epoll_fd, events, 1000, -1);
+		gettimeofday(&nwval, NULL);
 	
+		if(nwval.tv_sec - tmval.tv_sec > 300)
+		{
+			break;
+		}
+		
+		int n = epoll_wait(epoll_fd, ep_events, 1000, 0);
+		
 		for(int j = 0; j < n; j++)
 		{
-			if(events[j].events & EPOLLIN)
+			if(ep_events[j].events & EPOLLIN)
 			{
-				printf("can read\n");
-				char buffer[2048] ={0};
-			        read(events[j].data.fd, buffer, 2048);
-				printf("read data:%s", buffer);
-				close(events[j].data.fd);
+				memset(read_buf, 0, 2048);
+				fprintf(stderr, "Read\n");
+			
+				int result;
+				socklen_t socklen = sizeof(result);
+				if(getsockopt(ep_events[j].data.fd, SOL_SOCKET, SO_ERROR, &result, &socklen) == -1)	
+				{
+					fprintf(stderr, "getsockopt errori\n");	
+					continue;
+				}
+				else
+				{
+					if(result != 0)
+					{
+						fprintf(stderr, "connect error\n");
+						close(ep_events[j].data.fd);
+						continue;
+					}
+				}
+
+             			int ret = Socket::Recv(ep_events[j].data.fd, read_buf, 2048);
+			        recv_count++;
+	
+				fprintf(stderr, "read content:%s\n", read_buf);
+				
+				close(ep_events[j].data.fd);
+				
+				int sockfd = Socket::NewSocket(Protocol_TCP);
+				NewConn(sockfd);
+	
 			}
-			else if(events[j].events & EPOLLOUT)
+			else if(ep_events[j].events & EPOLLOUT)
 			{
-				printf("can write\n");
-				char buffer[2048] = "hello world";
-				write(events[j].data.fd, buffer, 2014);
-				events[j].events = EPOLLIN;
-				epoll_ctl(epoll_fd, EPOLL_CTL_MOD, events[j].data.fd, &events[j]);
-				continue;
+				memset(write_buf, 0, 1024);
+				fprintf(stderr, "Write\n");
+				
+				struct epoll_event ep_event;
+				ep_event.data.fd = ep_events[j].data.fd;
+				ep_event.events = EPOLLIN;	
+					
+				epoll_ctl(epoll_fd, EPOLL_CTL_MOD, ep_event.data.fd, &ep_event);
+				
+                                Socket::Send(ep_events[j].data.fd, "hello", 6);
+				send_count++;
 			}
-			close(events[j].data.fd);
+			else
+			{
+				fprintf(stderr, "error\n");
+				close(ep_events[j].data.fd);
+			}
 		}
 	}
 	
+	close(epoll_fd);
+	printf("send count in one minute:%d", send_count/5);
+	printf("recv count in one minute:%d", recv_count/5);
 	return 0;
-}	
+}
