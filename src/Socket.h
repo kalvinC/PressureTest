@@ -11,7 +11,7 @@ class Socket{
 public:
         static int NewSocket(Protocol_Type protocol_type);
 	static void CloseSocket(int fd);
-	static int SetNonBlocking(int fd);
+	static int SetNonBlock(int fd);
 	static int Connect(int fd, char * ip, unsigned short port);
 	static int Send(int fd, char * buffer, size_t buffer_size);
 	static int Recv(int fd, char * buffer, size_t buffer_size);

@@ -2,10 +2,13 @@ CC=g++
 CFLAGS=-c -g
 OFLAGS=-o
 
+VPATH=./src
 TARGET=PressTest
-OBJS=
+OBJS=$(patsubst %.cpp, %.o, $(wildcard ./src/*.cpp))
+
 
 $(TARGET):$(OBJS)
+	@echo $(OBJS)
 	$(CC) $(OFLAGS) $@ $^
 
 %.o:%.cpp
@@ -17,4 +20,8 @@ $(TARGET):$(OBJS)
 .PHONY:clean
 
 clean:
+	rm $(TARGET)
 	rm -rf *.o
+	cd ./src
+	rm -rf *.o
+
